@@ -9,6 +9,8 @@ Document :: struct {
 	name:   string,
 	tokens: []string,
 	vec:    []f32,
+	// let the user store whatever data they want
+	meta:   rawptr,
 }
 destroy_document :: proc(doc: ^Document) {
 	delete(doc.name)
@@ -172,7 +174,7 @@ dot_product :: proc(a, b: []f32) -> (dot: f32) {
 	return
 }
 
-add_document :: proc(tfidf: ^Tfidf, id: int, name, text: string) {
+add_document :: proc(tfidf: ^Tfidf, id: int, name, text: string, meta: rawptr = nil) {
 	tokens := tfidf.tokenizer(name, text)
 	defer delete(tokens)
 	id := len(tfidf.docs)
@@ -180,6 +182,7 @@ add_document :: proc(tfidf: ^Tfidf, id: int, name, text: string) {
 		id     = id,
 		name   = strings.clone(name),
 		tokens = slice.clone(tokens[:]),
+		meta   = meta,
 	}
 	append(&tfidf.docs, doc)
 }
@@ -196,7 +199,7 @@ Search_Result :: struct {
 	score: f32,
 	name:  string,
 	id:    int,
-	index: int,
+	meta:  rawptr,
 }
 
 destroy_search_result :: proc(res: ^Search_Result) {
@@ -220,7 +223,7 @@ search :: proc(tfidf: ^Tfidf, query: string, result_count := 10) -> (results: []
 			score = score,
 			name  = doc.name,
 			id    = doc.id,
-			index = i,
+			meta  = doc.meta,
 		}
 	}
 

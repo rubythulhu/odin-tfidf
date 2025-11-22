@@ -53,9 +53,8 @@ main :: proc() {
 	res := tfidf.search(&t, qry)
 	defer tfidf.destroy(&res)
 	fmt.printfln("Search time: %s\n", ela)
+	fmt.eprintfln("%#v", res)
 	for r, i in res {
 		if r.score > 0 { fmt.printfln("* [id:% 3d, score: %.3f] %s", r.id, r.score, r.name) }
 	}
-
-
 }
