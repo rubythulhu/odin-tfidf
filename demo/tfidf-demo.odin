@@ -24,7 +24,6 @@ main :: proc() {
 	if len(args) < 2 {
 		fmt.eprintln("please provide a search query. some sample terms:")
 		fmt.eprint(IDEAS)
-
 		return
 	}
 	t := tfidf.make_tfidf()
