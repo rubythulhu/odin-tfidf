@@ -175,7 +175,7 @@ dot_product :: proc(a, b: []f32) -> (dot: f32) {
 add_document :: proc(tfidf: ^Tfidf, id: int, name, text: string) {
 	tokens := tfidf.tokenizer(name, text)
 	defer delete(tokens)
-	id := len(tfidf.docs) + 1
+	id := len(tfidf.docs)
 	doc := Document {
 		id     = id,
 		name   = strings.clone(name),
