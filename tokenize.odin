@@ -1,10 +1,22 @@
 package tfidf
 
-import "core:strings"
+import "core:fmt"
+import "core:math"
+import "core:mem"
 import "core:slice"
+import "core:strings"
 
 tokenizer :: proc(name, document: string) -> []string {
-	tokenize :: proc(toks: ^[dynamic]string, text: string) {
+	// used for the stemmer, usually allocs between 48-64ish bytes from what i've noticed
+	arena_mem := make([]u8, 256)
+	defer delete(arena_mem)
+	arena: mem.Arena
+	mem.arena_init(&arena, arena_mem)
+
+	tokenize :: proc(toks: ^[dynamic]string, text: string, arena: ^mem.Arena) {
+		arena_allocator := mem.arena_allocator(arena)
+
+		tokens := make([dynamic]string)
 		lc_text := strings.to_lower(text)
 		defer delete(lc_text)
 		if len(text) == 0 {
@@ -22,7 +34,10 @@ tokenizer :: proc(name, document: string) -> []string {
 			substr := lc_text[from + 1:to]
 
 			if is_max || is_sep {
-			  stemmed := stem(substr)
+				// clone the stemmed word w/ real allocator
+				stemmed := strings.clone(stem(substr, arena_allocator))
+				// clear arena between words
+				mem.arena_free_all(arena)
 				append(toks, stemmed)
 				from = i
 			}
@@ -30,15 +45,17 @@ tokenizer :: proc(name, document: string) -> []string {
 	}
 	tokens := make([dynamic]string)
 	defer delete(tokens)
-	tokenize(&tokens, name)
-	tokenize(&tokens, document)
+	tokenize(&tokens, name, &arena)
+	tokenize(&tokens, document, &arena)
 	return slice.clone(tokens[:])
 }
 
 // Porter2 English Stemmer
 // Based on https://snowballstem.org/algorithms/english/stemmer.html
 
-stem :: proc(word: string) -> string {
+stem :: proc(word: string, allocator: mem.Allocator) -> string {
+	context.allocator = allocator
+
 	if len(word) <= 2 {
 		return strings.clone(word)
 	}
@@ -56,8 +73,7 @@ stem :: proc(word: string) -> string {
 	case "early": return strings.clone("earli")
 	case "only": return strings.clone("onli")
 	case "singly": return strings.clone("singl")
-	case "sky", "news", "howe", "atlas", "cosmos", "bias", "andes":
-		return strings.clone(word)
+	case "sky", "news", "howe", "atlas", "cosmos", "bias", "andes": return strings.clone(word)
 	}
 
 	// Work with a mutable copy
@@ -74,8 +90,7 @@ stem :: proc(word: string) -> string {
 
 	// Check post-1a exceptions
 	switch w {
-	case "inning", "outing", "canning", "herring", "earring", "proceed", "exceed", "succeed":
-		return w
+	case "inning", "outing", "canning", "herring", "earring", "proceed", "exceed", "succeed": return w
 	}
 
 	// Step 1b
@@ -132,8 +147,8 @@ mark_ys :: proc(word: string) -> string {
 	}
 
 	// Mark y as Y if it comes after a vowel
-	for i in 1..<len(bytes) {
-		if bytes[i] == 'y' && is_vowel(bytes[i-1]) {
+	for i in 1 ..< len(bytes) {
+		if bytes[i] == 'y' && is_vowel(bytes[i - 1]) {
 			bytes[i] = 'Y'
 		}
 	}
@@ -143,9 +158,7 @@ mark_ys :: proc(word: string) -> string {
 
 get_r1 :: proc(word: string) -> int {
 	// Special cases
-	if strings.has_prefix(word, "gener") ||
-	   strings.has_prefix(word, "commun") ||
-	   strings.has_prefix(word, "arsen") {
+	if strings.has_prefix(word, "gener") || strings.has_prefix(word, "commun") || strings.has_prefix(word, "arsen") {
 		return 5
 	}
 
@@ -168,7 +181,7 @@ get_r2 :: proc(word: string) -> int {
 	}
 
 	found_vowel := false
-	for i in r1..<len(word) {
+	for i in r1 ..< len(word) {
 		if is_vowel(word[i]) {
 			found_vowel = true
 		} else if found_vowel {
@@ -186,10 +199,14 @@ is_short_syllable :: proc(word: string, pos: int) -> bool {
 
 	// In middle: non-vowel, vowel, non-vowel (not w, x, Y)
 	if pos >= 2 && pos < len(word) {
-		return is_consonant(word[pos-2]) &&
-		       is_vowel(word[pos-1]) &&
-		       is_consonant(word[pos]) &&
-		       word[pos] != 'w' && word[pos] != 'x' && word[pos] != 'Y'
+		return(
+			is_consonant(word[pos - 2]) &&
+			is_vowel(word[pos - 1]) &&
+			is_consonant(word[pos]) &&
+			word[pos] != 'w' &&
+			word[pos] != 'x' &&
+			word[pos] != 'Y' \
+		)
 	}
 
 	return false
@@ -207,13 +224,22 @@ ends_with_double :: proc(word: string) -> bool {
 	if len(word) < 2 {
 		return false
 	}
-	last := word[len(word)-1]
-	prev := word[len(word)-2]
+	last := word[len(word) - 1]
+	prev := word[len(word) - 2]
 	if last != prev {
 		return false
 	}
-	return last == 'b' || last == 'd' || last == 'f' || last == 'g' ||
-	       last == 'm' || last == 'n' || last == 'p' || last == 'r' || last == 't'
+	return(
+		last == 'b' ||
+		last == 'd' ||
+		last == 'f' ||
+		last == 'g' ||
+		last == 'm' ||
+		last == 'n' ||
+		last == 'p' ||
+		last == 'r' ||
+		last == 't' \
+	)
 }
 
 replace_suffix :: proc(word: string, suffix: string, replacement: string, min_r: int) -> (string, bool) {
@@ -232,13 +258,13 @@ replace_suffix :: proc(word: string, suffix: string, replacement: string, min_r:
 step0 :: proc(word: string) -> string {
 	w := word
 	if strings.has_suffix(w, "'s'") {
-		return w[:len(w)-3]
+		return w[:len(w) - 3]
 	}
 	if strings.has_suffix(w, "'s") {
-		return w[:len(w)-2]
+		return w[:len(w) - 2]
 	}
 	if strings.has_suffix(w, "'") {
-		return w[:len(w)-1]
+		return w[:len(w) - 1]
 	}
 	return w
 }
@@ -248,12 +274,12 @@ step1a :: proc(word: string) -> string {
 
 	// sses -> ss
 	if strings.has_suffix(w, "sses") {
-		return w[:len(w)-2]
+		return w[:len(w) - 2]
 	}
 
 	// ied, ies -> i or ie
 	if strings.has_suffix(w, "ied") || strings.has_suffix(w, "ies") {
-		stem := w[:len(w)-3]
+		stem := w[:len(w) - 3]
 		if len(stem) > 1 {
 			return strings.concatenate({stem, "i"})
 		} else {
@@ -268,7 +294,7 @@ step1a :: proc(word: string) -> string {
 
 	// s -> delete if vowel before
 	if strings.has_suffix(w, "s") {
-		stem := w[:len(w)-1]
+		stem := w[:len(w) - 1]
 		if contains_vowel(stem) {
 			return stem
 		}
@@ -284,13 +310,13 @@ step1b :: proc(word: string) -> string {
 	// eed, eedly -> ee (if in R1)
 	if strings.has_suffix(w, "eedly") {
 		if len(w) - 5 >= r1 {
-			return w[:len(w)-3]
+			return w[:len(w) - 3]
 		}
 		return w
 	}
 	if strings.has_suffix(w, "eed") {
 		if len(w) - 3 >= r1 {
-			return w[:len(w)-1]
+			return w[:len(w) - 1]
 		}
 		return w
 	}
@@ -304,14 +330,12 @@ step1b :: proc(word: string) -> string {
 				// Apply further modifications
 				delete(w)
 
-				if strings.has_suffix(stem, "at") ||
-				   strings.has_suffix(stem, "bl") ||
-				   strings.has_suffix(stem, "iz") {
+				if strings.has_suffix(stem, "at") || strings.has_suffix(stem, "bl") || strings.has_suffix(stem, "iz") {
 					return strings.concatenate({stem, "e"})
 				}
 
 				if ends_with_double(stem) {
-					return stem[:len(stem)-1]
+					return stem[:len(stem) - 1]
 				}
 
 				if is_short_word(stem) {
@@ -334,9 +358,9 @@ step1c :: proc(word: string) -> string {
 		return w
 	}
 
-	if (w[len(w)-1] == 'y' || w[len(w)-1] == 'Y') && is_consonant(w[len(w)-2]) {
+	if (w[len(w) - 1] == 'y' || w[len(w) - 1] == 'Y') && is_consonant(w[len(w) - 2]) {
 		bytes := transmute([]u8)w
-		bytes[len(bytes)-1] = 'i'
+		bytes[len(bytes) - 1] = 'i'
 		return w
 	}
 
@@ -347,7 +371,11 @@ step2 :: proc(word: string) -> string {
 	w := word
 	r1 := get_r1(w)
 
-	replacements := []struct{suffix: string, replacement: string, special: bool} {
+	replacements := []struct {
+		suffix:      string,
+		replacement: string,
+		special:     bool,
+	} {
 		{"ational", "ate", false},
 		{"tional", "tion", false},
 		{"enci", "ence", false},
@@ -371,7 +399,7 @@ step2 :: proc(word: string) -> string {
 		{"fulli", "ful", false},
 		{"lessli", "less", false},
 		{"ogi", "og", true}, // Special: needs 'l' before
-		{"li", "", true},    // Special: needs valid li-ending
+		{"li", "", true}, // Special: needs valid li-ending
 	}
 
 	for rep in replacements {
@@ -385,7 +413,7 @@ step2 :: proc(word: string) -> string {
 
 			// Special cases
 			if rep.suffix == "ogi" {
-				if len(stem) > 0 && stem[len(stem)-1] == 'l' {
+				if len(stem) > 0 && stem[len(stem) - 1] == 'l' {
 					delete(w)
 					return strings.concatenate({stem, rep.replacement})
 				}
@@ -394,10 +422,18 @@ step2 :: proc(word: string) -> string {
 
 			if rep.suffix == "li" {
 				if len(stem) > 0 {
-					last := stem[len(stem)-1]
-					valid_li := last == 'c' || last == 'd' || last == 'e' || last == 'g' ||
-					            last == 'h' || last == 'k' || last == 'm' || last == 'n' ||
-					            last == 'r' || last == 't'
+					last := stem[len(stem) - 1]
+					valid_li :=
+						last == 'c' ||
+						last == 'd' ||
+						last == 'e' ||
+						last == 'g' ||
+						last == 'h' ||
+						last == 'k' ||
+						last == 'm' ||
+						last == 'n' ||
+						last == 'r' ||
+						last == 't'
 					if valid_li {
 						delete(w)
 						return stem
@@ -419,7 +455,11 @@ step3 :: proc(word: string) -> string {
 	r1 := get_r1(w)
 	r2 := get_r2(w)
 
-	replacements := []struct{suffix: string, replacement: string, r2_only: bool} {
+	replacements := []struct {
+		suffix:      string,
+		replacement: string,
+		r2_only:     bool,
+	} {
 		{"ational", "ate", false},
 		{"tional", "tion", false},
 		{"alize", "al", false},
@@ -454,9 +494,24 @@ step4 :: proc(word: string) -> string {
 	w := word
 	r2 := get_r2(w)
 
-	suffixes := []string{
-		"al", "ance", "ence", "er", "ic", "able", "ible", "ant",
-		"ement", "ment", "ent", "ism", "ate", "iti", "ous", "ive", "ize",
+	suffixes := []string {
+		"al",
+		"ance",
+		"ence",
+		"er",
+		"ic",
+		"able",
+		"ible",
+		"ant",
+		"ement",
+		"ment",
+		"ent",
+		"ism",
+		"ate",
+		"iti",
+		"ous",
+		"ive",
+		"ize",
 	}
 
 	for suffix in suffixes {
@@ -472,9 +527,9 @@ step4 :: proc(word: string) -> string {
 
 	// Special case for "ion"
 	if strings.has_suffix(w, "ion") {
-		stem := w[:len(w)-3]
+		stem := w[:len(w) - 3]
 		if len(stem) >= r2 && len(stem) > 0 {
-			last := stem[len(stem)-1]
+			last := stem[len(stem) - 1]
 			if last == 's' || last == 't' {
 				delete(w)
 				return stem
@@ -492,7 +547,7 @@ step5 :: proc(word: string) -> string {
 
 	// Delete 'e'
 	if strings.has_suffix(w, "e") {
-		stem := w[:len(w)-1]
+		stem := w[:len(w) - 1]
 		if len(stem) >= r2 {
 			delete(w)
 			return stem
@@ -505,7 +560,7 @@ step5 :: proc(word: string) -> string {
 
 	// Delete 'l' if in R2 and preceded by 'l'
 	if strings.has_suffix(w, "ll") {
-		stem := w[:len(w)-1]
+		stem := w[:len(w) - 1]
 		if len(stem) >= r2 {
 			delete(w)
 			return stem
