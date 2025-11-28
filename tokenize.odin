@@ -6,23 +6,17 @@ import "core:mem"
 import "core:slice"
 import "core:strings"
 
-tokenizer :: proc(texts: ..string, stem_tokens := true) -> []string {
-	arena_mem: []u8
-	arena: mem.Arena
+tokenizer :: proc(name, document: string) -> []string {
 	// used for the stemmer, usually allocs between 48-64ish bytes from what i've noticed
-	if stem_tokens {
-		arena_mem = make([]u8, 256)
-		defer delete(arena_mem)
-		arena: mem.Arena
-		mem.arena_init(&arena, arena_mem)
-	}
+	arena_mem := make([]u8, 256)
+	defer delete(arena_mem)
+	arena: mem.Arena
+	mem.arena_init(&arena, arena_mem)
 
-	tokenize :: proc(toks: ^[dynamic]string, text: string, stem_tokens: bool, arena: ^mem.Arena) {
-		arena_allocator: mem.Allocator
-		if stem_tokens {
-			arena_allocator = mem.arena_allocator(arena)
-		}
+	tokenize :: proc(toks: ^[dynamic]string, text: string, arena: ^mem.Arena) {
+		arena_allocator := mem.arena_allocator(arena)
 
+		tokens := make([dynamic]string)
 		lc_text := strings.to_lower(text)
 		defer delete(lc_text)
 		if len(text) == 0 {
@@ -40,31 +34,21 @@ tokenizer :: proc(texts: ..string, stem_tokens := true) -> []string {
 			substr := lc_text[from + 1:to]
 
 			if is_max || is_sep {
-				token: string
-				if stem_tokens {
-					token = strings.clone(stem(substr, arena_allocator))
-					mem.arena_free_all(arena)
-				} else {
-					token = strings.clone(substr)
-				}
-				append(toks, token)
+				// clone the stemmed word w/ real allocator
+				stemmed := strings.clone(stem(substr, arena_allocator))
+				// clear arena between words
+				mem.arena_free_all(arena)
+				append(toks, stemmed)
 				from = i
 			}
 		}
 	}
 	tokens := make([dynamic]string)
 	defer delete(tokens)
-	for text in texts {
-		tokenize(&tokens, text, stem_tokens, &arena)
-	}
+	tokenize(&tokens, name, &arena)
+	tokenize(&tokens, document, &arena)
 	return slice.clone(tokens[:])
 }
-
-destroy_tokens :: proc(tokens: []string) {
-	for tok in tokens { delete(tok) }
-	delete(tokens)
-}
-
 
 // Porter2 English Stemmer
 // Based on https://snowballstem.org/algorithms/english/stemmer.html
