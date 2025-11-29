@@ -1,8 +1,13 @@
 package tfidf
 
+import tokenizer "./tokenizer"
 import "core:math"
 import "core:slice"
 import "core:strings"
+
+Token_List :: tokenizer.Token_List
+Tokenizer :: tokenizer.Tokenizer
+DEFAULT_TOKENIZER :: tokenizer.DEFAULT_TOKENIZER
 
 Document :: struct {
 	id:     int,
@@ -12,6 +17,7 @@ Document :: struct {
 	// let the user store whatever data they want
 	meta:   rawptr,
 }
+
 destroy_document :: proc(doc: ^Document) {
 	delete(doc.name)
 	for tok in doc.tokens {
@@ -34,13 +40,10 @@ destroy_vocab :: proc(voc: ^Vocab) {
 	delete(voc.doc_frequency)
 }
 
-Tokenizer :: #type proc(name, text: string) -> (results: []string)
-
 Tfidf :: struct {
-	vocab:     Vocab,
-	docs:      [dynamic]Document,
-	idf:       []f32,
-	tokenizer: Tokenizer,
+	vocab: Vocab,
+	docs:  [dynamic]Document,
+	idf:   []f32,
 }
 
 destroy_tfidf :: proc(tfidf: ^Tfidf) {
@@ -52,13 +55,12 @@ destroy_tfidf :: proc(tfidf: ^Tfidf) {
 	delete(tfidf.idf)
 }
 
-init_tfidf :: proc(tfidf: ^Tfidf, tokenizer: Tokenizer = tokenizer) {
+init_tfidf :: proc(tfidf: ^Tfidf) {
 	tfidf.docs = make([dynamic]Document)
-	tfidf.tokenizer = tokenizer
 }
 
-make_tfidf :: proc(tokenizer: Tokenizer = tokenizer) -> (tfidf: Tfidf) {
-	init_tfidf(&tfidf, tokenizer)
+make_tfidf :: proc() -> (tfidf: Tfidf) {
+	init_tfidf(&tfidf)
 	return tfidf
 }
 
@@ -133,12 +135,7 @@ build_doc_vectors :: proc(tfidf: ^Tfidf, doc: ^Document) {
 }
 
 @(private = "package")
-query_vectors :: proc(tfidf: ^Tfidf, query: string) -> (vec: []f32) {
-	tokens := tfidf.tokenizer("", query)
-	defer {
-		for tok in tokens { delete(tok) }
-		delete(tokens)
-	}
+query_vectors :: proc(tfidf: ^Tfidf, tokens: Token_List) -> (vec: []f32) {
 
 	vec = make([]f32, len(tfidf.vocab.word_to_index))
 	tf := make(map[int]int)
@@ -174,14 +171,30 @@ dot_product :: proc(a, b: []f32) -> (dot: f32) {
 	return
 }
 
-add_document :: proc(tfidf: ^Tfidf, id: int, name, text: string, meta: rawptr = nil) {
-	tokens := tfidf.tokenizer(name, text)
-	defer delete(tokens)
+add_document :: proc {
+	add_document_by_text,
+	add_document_by_tokens,
+}
+
+add_document_by_text :: proc(
+	tfidf: ^Tfidf,
+	id: int,
+	name: string,
+	document_text: string,
+	meta: rawptr = nil,
+	tokenize: Tokenizer = DEFAULT_TOKENIZER,
+) {
+	document_tokens := tokenize(name, document_text)
+	defer delete(document_tokens)
+	add_document_by_tokens(tfidf, id, name, document_tokens, meta)
+}
+
+add_document_by_tokens :: proc(tfidf: ^Tfidf, id: int, name: string, document_tokens: Token_List, meta: rawptr = nil) {
 	id := len(tfidf.docs)
 	doc := Document {
 		id     = id,
 		name   = strings.clone(name),
-		tokens = slice.clone(tokens[:]),
+		tokens = slice.clone(document_tokens[:]),
 		meta   = meta,
 	}
 	append(&tfidf.docs, doc)
@@ -210,9 +223,28 @@ destroy_search_results :: proc(res: ^[]Search_Result) {
 	delete(res^)
 }
 
-search :: proc(tfidf: ^Tfidf, query: string, result_count := 10) -> (results: []Search_Result) {
+
+search :: proc {
+	search_text,
+	search_tokens,
+}
+
+search_text :: proc(
+	tfidf: ^Tfidf,
+	query: string,
+	result_count := 10,
+	tokenize: Tokenizer = DEFAULT_TOKENIZER,
+) -> (
+	results: []Search_Result,
+) {
+	tokens := tokenize(query)
+	defer destroy(tokens)
+	return search_tokens(tfidf, tokens, result_count)
+}
+
+search_tokens :: proc(tfidf: ^Tfidf, query_tokens: Token_List, result_count := 10) -> (results: []Search_Result) {
 	ndocs := len(tfidf.docs)
-	vec := query_vectors(tfidf, query)
+	vec := query_vectors(tfidf, query_tokens)
 	defer delete(vec)
 	scores := make([]Search_Result, ndocs)
 	defer delete(scores)
@@ -245,4 +277,5 @@ destroy :: proc {
 	destroy_vocab,
 	destroy_tfidf,
 	destroy_search_results,
+	tokenizer.destroy_tokens,
 }

@@ -2,6 +2,7 @@ package tfidf_demo
 
 import tfidf ".."
 import "core:fmt"
+import "core:mem"
 import "core:os"
 import "core:strings"
 import "core:time"
@@ -20,6 +21,30 @@ IDEAS :: `
 
 
 main :: proc() {
+	when ODIN_DEBUG {
+		track: mem.Tracking_Allocator
+		mem.tracking_allocator_init(&track, context.allocator)
+		track.bad_free_callback = mem.tracking_allocator_bad_free_callback_add_to_array
+		context.allocator = mem.tracking_allocator(&track)
+		defer {
+			if len(track.allocation_map) > 0 {
+				fmt.eprintf("=== %v allocations not freed: ===\n", len(track.allocation_map))
+				total: int
+				for _, entry in track.allocation_map {
+					total += entry.size
+					fmt.eprintf("- %v bytes @ %v\n", entry.size, entry.location)
+				}
+				fmt.eprintf("-> %v bytes total\n", total)
+			}
+			if len(track.bad_free_array) > 0 {
+				fmt.eprintf("=== %v incorrect frees: ===\n", len(track.bad_free_array))
+				for entry in track.bad_free_array {
+					fmt.eprintf("- %p @ %v\n", entry.memory, entry.location)
+				}
+			}
+			mem.tracking_allocator_destroy(&track)
+		}
+	}
 	args := os.args
 	if len(args) < 2 {
 		fmt.eprintln("please provide a search query. some sample terms:")

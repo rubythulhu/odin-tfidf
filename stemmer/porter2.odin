@@ -1,60 +1,26 @@
-package tfidf
+package tfidf_stemmer
 
-import "core:fmt"
-import "core:math"
 import "core:mem"
-import "core:slice"
 import "core:strings"
 
-tokenizer :: proc(name, document: string) -> []string {
-	// used for the stemmer, usually allocs between 48-64ish bytes from what i've noticed
+// Porter2 English Stemmer
+// Based on https://snowballstem.org/algorithms/english/stemmer.html
+porter2_stem :: proc(word: string) -> string {
 	arena_mem := make([]u8, 256)
 	defer delete(arena_mem)
 	arena: mem.Arena
 	mem.arena_init(&arena, arena_mem)
+	defer mem.arena_free_all(&arena)
 
-	tokenize :: proc(toks: ^[dynamic]string, text: string, arena: ^mem.Arena) {
-		arena_allocator := mem.arena_allocator(arena)
-
-		tokens := make([dynamic]string)
-		lc_text := strings.to_lower(text)
-		defer delete(lc_text)
-		if len(text) == 0 {
-			return
-		}
-		from := -1
-		max := len(lc_text) - 1
-		for ch, i in lc_text {
-			is_sep := strings.is_separator(ch)
-			is_max := i == max
-			to := i
-			if is_max && !is_sep {
-				to = i + 1
-			}
-			substr := lc_text[from + 1:to]
-
-			if is_max || is_sep {
-				// clone the stemmed word w/ real allocator
-				stemmed := strings.clone(stem(substr, arena_allocator))
-				// clear arena between words
-				mem.arena_free_all(arena)
-				append(toks, stemmed)
-				from = i
-			}
-		}
-	}
-	tokens := make([dynamic]string)
-	defer delete(tokens)
-	tokenize(&tokens, name, &arena)
-	tokenize(&tokens, document, &arena)
-	return slice.clone(tokens[:])
+	return porter2_stem_shared_arena(word, &arena)
 }
 
-// Porter2 English Stemmer
-// Based on https://snowballstem.org/algorithms/english/stemmer.html
-
-stem :: proc(word: string, allocator: mem.Allocator) -> string {
-	context.allocator = allocator
+// if you want to share an arena between multiple stem() calls, use this.
+// you must pass a pre-initialized arena to this. this will help performance
+// a little bit, especially when sharing the arena over an entire large
+// document
+porter2_stem_shared_arena :: proc(word: string, arena: ^mem.Arena) -> string {
+	context.allocator = mem.arena_allocator(arena)
 
 	if len(word) <= 2 {
 		return strings.clone(word)
